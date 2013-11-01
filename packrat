@@ -1,0 +1,983 @@
+#!/usr/bin/perl
+
+# Packrat is a tool that locally archives images that have been saved on reddit.com, liked on tumblr.com, or bookmarked on del.icio.us. Packrat supports multiple accounts on each of these sites. 
+
+# Include perl modules
+use JSON::XS; 		# Used for processing JSON results received from web apis and for reading and writing the .packrat.conf file.
+use XML::Simple;	# Used to parse the result received when querying del.icio.us for new bookmarks.
+use LWP::UserAgent;	# Used to fetch JSON from apis and download images.
+use OAuth::Consumer;# Used to fetch JSON from tumblr.
+use File::Basename;	# Used to parse the filename, extension, and the rest of the URI from URLs.
+#use File::Copy;		# Used to copy files.
+use File::Path qw(make_path); # Used to create directory trees.
+use Env qw(HOME);	# Used to retreive the $HOME environment variable.
+use File::Slurp;	# Used to read the .packrat.conf file.
+use DateTime;		# Used to parse and create date/time strings and perform date/time arithemtic when working with the del.icio.us api.
+
+use strict;
+#use warnings;
+
+my $conf_file = "$HOME/.packrat.conf";
+
+# Constants that should be available in the boradest scope possible.
+my $CONF_UPDATE = 0;
+my $CONF;
+my $DESTINATION;
+my $NONIMAGEFILE;
+my $FAILEDURLS;
+my $IMGUR_ID;
+my $TRACK;
+my @SUFFIXES = ('jpeg', 'jpg', 'png', 'gif', 'bmp', 'tif', 'tiff'); # The list of image extensions we will be saving.
+
+if(-e $conf_file){
+	my $configuration = read_file($conf_file);
+	$CONF = JSON::XS->new->decode($configuration);
+
+# Assign constants from the configuration file.
+	$DESTINATION = $CONF->{'destination'};	 # The detination where downloaded images will be saved.
+	$NONIMAGEFILE = $CONF->{'nonimage_file'}; # The file where URLs that are not direct links to images will be saved.
+	$FAILEDURLS = $CONF->{'failed_urls_file'};# The file where URLs that cannot be downloaded will be saved.
+	$IMGUR_ID = $CONF->{'imgur_auth_id'};	 # The imgur authentication ID (obtained from imgur when an application is registered).
+}
+
+# The track file is a json file that packrat creates and maintains.
+# It contains the information that packrat needs to keep track of which 
+# posts have been fetched and which are new.
+my $track_file = "$HOME/Dropbox/.packrat/packrat.track";
+
+if(-e $track_file){
+	my $tracking = read_file($track_file);
+	$TRACK = JSON::XS->new->decode($tracking);
+}
+
+# The check_env() subroutine does a basic check of the environment to make sure packrat can run without any major errors.
+sub check_env{
+	# Check whether the detination directory is writeable.
+	if (!-w $DESTINATION){
+		print "Cannot write to $DESTINATION. Exiting.\n";
+		exit 0;
+	}
+
+	# If the destination does not exist, create it.
+	if (!-e $DESTINATION){
+		print "$DESTINATION does not exist. Creating it.\n";
+		make_path $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit 0;
+	}
+}
+
+# The first_run() subroutine walks the user through setting up packrat's
+# settings as well as authorizing packrat to access online accounts.
+sub first_run{
+	print "\nWelcome to packrat. Let's get some configuration details\n";
+	print "so that packrat will work for you.\n";
+
+	if(!$DESTINATION){
+		print "\nWhere do you want to save image files that packrat downloads? [$HOME/packrat] ";
+		$DESTINATION = <STDIN>;
+		chomp($DESTINATION);
+		if(!$DESTINATION){
+			$DESTINATION = "$HOME/packrat";
+		}
+
+		$CONF->{'destination'} = $DESTINATION;
+		mkdir $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit;
+	}
+
+	if(!-e "$HOME/.packrat"){
+		mkdir "$HOME/.packrat" || print "Cannot create directory $HOME/.packrat: $!\n" && exit;
+	}
+
+	if(!$NONIMAGEFILE){
+		print "\nWhere should packrat save URLs that aren't direct image links? [$HOME/.packrat/nonimages] ";
+
+		$NONIMAGEFILE = <STDIN>;
+		chomp($NONIMAGEFILE);
+
+		if(!$NONIMAGEFILE){
+			$NONIMAGEFILE= "$HOME/.packrat/nonimages";
+		}
+
+		$CONF->{'nonimage_file'} = $NONIMAGEFILE;
+	}
+
+	if(!$FAILEDURLS){
+		my($filename, $directory) = fileparse($NONIMAGEFILE);
+
+		$FAILEDURLS = $directory . 'failedurls'; 
+
+		$CONF->{'failed_urls_file'} = $FAILEDURLS;
+	}
+
+	if(!$IMGUR_ID){
+
+				print "\nLog on to http://imgur.com, then navigate to https://api.imgur.com/oauth2/addclient and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here.\nJust leave this blank if you don't want to use imgur.\n";
+		print "Imgur.com Client ID: ";
+		$IMGUR_ID = <STDIN>;
+		chomp($IMGUR_ID);
+
+		if($IMGUR_ID eq ''){
+			$IMGUR_ID = 'disabled';
+		}
+
+		$CONF->{'imgur_auth_id'} = $IMGUR_ID;
+	}
+
+	my $new_conf = JSON::XS->new->pretty(1)->encode($CONF);
+	open(CONFIGURATION, '>', $conf_file) || print "Cannot write configuration to $conf_file: $!\n" && exit;
+	print CONFIGURATION $new_conf;
+	close CONFIGURATION;
+}
+
+sub add_tumblr{
+
+	my $tumblr_accounts = [];
+	print "\nIt looks like you've never added a tumblr account to packrat.\n";
+	print "Follow these instructions to add one or more accounts now.\n";
+	print "Do you want to add a tumblr account? [Y/n] ";
+
+	ADD_TUMBLR:{
+		my $add_tumblr = <STDIN>;
+		chomp $add_tumblr;
+
+		if($add_tumblr =~ /^n$/i){
+			return;
+		}
+		elsif($add_tumblr !~ /^(y|n)$/i && $add_tumblr != ''){
+			print "Please type 'y' or 'n' ";
+			redo ADD_TUMBLR;
+		}
+	}
+
+	ADDACCOUNT:{
+
+		my $account = {};
+
+		my $request_token_url = 'http://www.tumblr.com/oauth/request_token';
+		my $authorize_url = 'http://www.tumblr.com/oauth/authorize';
+		my $access_token_url = 'http://www.tumblr.com/oauth/access_token';
+
+		print "\ntumblr username: ";
+		my $username = <STDIN>;
+		chomp $username;
+
+		$account->{'username'} = $username;
+
+		print "\nLog on to tumblr.com and go to http://www.tumblr.com/oauth/apps\n";
+		print "Register a new application and add the details requested below.\n";
+		print "OAuth Consumer Key: ";
+		my $consumer_key = <STDIN>;
+		chomp $consumer_key;
+
+		$account->{'consumer_key'} = $consumer_key;
+
+		print "Secret Key: ";
+		my $secret_key = <STDIN>;
+		chomp $secret_key;
+
+		$account->{'consumer_secret'} = $secret_key;
+
+		my $ua = OAuth::Consumer->new(
+			 oauth_consumer_key => $consumer_key,
+			 oauth_consumer_secret => $secret_key,
+			 oauth_request_token_url => $request_token_url,
+			 oauth_authorize_url => $authorize_url,
+			 oauth_access_token_url => $access_token_url
+		);
+
+		my $verifier_url = $ua->get_request_token();
+
+		print "Paste this URL into your browser's address bar. Click 'Allow' to enable packrat to access your tumblr account:\n";
+		print "$verifier_url\n";
+
+		my ($token, $secret) = $ua->get_access_token();
+
+		$account->{'token_key'} = $token;
+		$account->{'token_secret'} = $secret;
+
+		push($tumblr_accounts, $account);
+
+		print "Packrat is now authorized to access your \"$username\" tumblr account.\n";
+
+		ANOTHER:{
+			print "\nWould you like to add another tumblr account? [Y/n]";
+			my $ans = <STDIN>;
+			chomp($ans);
+
+			if($ans =~ /^y$/i || $ans eq ''){
+				redo ADDACCOUNT;
+			}
+			elsif($ans =~ /^n$/i){
+				$CONF->{'services'}->{'tumblr'} = $tumblr_accounts;
+				$CONF_UPDATE = 1;
+				return;
+			}
+			else{
+				print "Please type 'y' or 'n' ";
+				redo ANOTHER;
+			}
+		}
+	}
+}
+
+sub add_delicious{
+
+	my $delicious_accounts = [];
+
+	print "\nIt looks like you've never added a delicious account to packrat.\n";
+	print "Follow these instructions to add one or more accounts now.\n";
+	print "Do you want to add a delicious account? [Y/n] ";
+
+	ADD_DELICIOUS:{
+		my $add_delicious = <STDIN>;
+		chomp $add_delicious;
+
+		if($add_delicious =~ /^n$/i){
+			return;
+		}
+		elsif($add_delicious !~ /^(y|n)$/i && $add_delicious != ''){
+			print "Please type 'y' or 'n' ";
+			redo ADD_DELICIOUS;
+		}
+	}
+
+
+	ADDACCOUNT:{
+
+		my $account = {};
+
+		print "\ndelicious username: ";
+		my $username = <STDIN>;
+		chomp $username;
+
+		$account->{'username'} = $username;
+
+		print "delicious password: ";
+		my $password = <STDIN>;
+		chomp $password;
+
+		$account->{'password'} = $password;
+
+		push($delicious_accounts, $account);
+
+		print "Packrat is now authorized to access your \"$username\" delicious account.\n";
+
+		ANOTHER:{
+			print "\nWould you like to add another delicious account? [Y/n]";
+			my $ans = <STDIN>;
+			chomp($ans);
+
+			if($ans =~ /^y$/i || $ans eq ''){
+				redo ADDACCOUNT;
+			}
+			elsif($ans =~ /^n$/i){
+				$CONF->{'services'}->{'delicious'} = $delicious_accounts;
+				$CONF_UPDATE = 1;
+				return;
+			}
+			else{
+				print "Please type 'y' or 'n' ";
+				redo ANOTHER;
+			}
+		}
+	}
+}
+
+sub add_reddit{
+
+	my $reddit_accounts = [];
+		
+	print "\nIt looks like you've never added a reddit account to packrat.\n";
+	print "Follow these instructions to add one or more accounts now.\n";
+	print "Do you want to add a reddit account? [Y/n] ";
+
+	ADD_REDDIT:{
+		my $add_reddit = <STDIN>;
+		chomp $add_reddit;
+
+		if($add_reddit =~ /^n$/i){
+			return;
+		}
+		elsif($add_reddit !~ /^(y|n)$/i || $add_reddit != ''){
+			print "Please type 'y' or 'n' ";
+			redo ADD_REDDIT;
+		}
+	}
+
+	ADDACCOUNT:{
+
+		my $account = {};
+
+		print "\nreddit username: ";
+		my $username = <STDIN>;
+		chomp $username;
+
+		$account->{'username'} = $username;
+
+		print "Log on to reddit.com and navigate to https://ssl.reddit.com/prefs/feeds/\n";
+		print "Locate the JSON button for \"your saved links\" and copy the link and paste it here.\n";
+		print "Saved link URL: ";
+		my $rssurl = <STDIN>;
+		chomp $rssurl;
+
+		$account->{'rss_url'} = $rssurl;
+
+		push($reddit_accounts, $account);
+
+		print "Packrat is now authorized to access your \"$username\" reddit account.\n";
+
+		ANOTHER:{
+			print "\nWould you like to add another reddit account? [Y/n] ";
+			my $ans = <STDIN>;
+			chomp($ans);
+
+			if($ans =~ /^y$/i || $ans eq ''){
+				redo ADDACCOUNT;
+			}
+			elsif($ans =~ /^n$/i){
+				$CONF->{'services'}->{'reddit'} = $reddit_accounts;
+				$CONF_UPDATE = 1;
+				return;
+			}
+			else{
+				print "Please type 'y' or 'n' ";
+				redo ANOTHER;
+			}
+		}
+	}
+}
+
+# The add_nonimage_url() subroutine appends a URL to the NONIMAGEFILE (a text file) if it is not a direct link to an image.
+sub add_nonimage_url{
+	my $url = shift;
+
+	open(NONIMAGES, '>>', $NONIMAGEFILE) || print "Cannot write to $NONIMAGEFILE: $!\n" && return;
+	print NONIMAGES $url . "\n";
+	close NONIMAGES;
+}
+
+# The randomstring() subroutine generates a 10-character string of pseudo-random alpha characters. It is used by the filename_check() subroutine to ensure that new files don't overwrite existing files with the same name.
+sub randomstring{
+	my @randstring = map { (q(a)..q(z))[rand(26)] } 1 .. 10;
+	my $rand;
+	foreach my $thing (@randstring){
+		$rand .= $thing;
+	}
+	return $rand;
+}
+
+# The filename_check() subroutine checks whether a filename exists in the destination, and if so it appends a pseudo-random string to the filename.
+sub filename_check{
+	my $oldname = shift;
+
+	if (-e "$DESTINATION/$oldname") {
+		CHECK:{
+			my $randstring = randomstring();
+			my ($fn, $path, $suffix) = fileparse($oldname, @SUFFIXES);
+			my $newname = "$fn$randstring.$suffix";
+			if (-e "$DESTINATION/$newname"){ # Check whether the newly generated filename exists
+				$oldname = $newname;
+				redo CHECK; # If is does exist, go back to the beginning of the CHECK block and re-append a new pseudo-random string.
+			}
+		return $newname;
+		}
+	}else{
+		return $oldname;
+	}
+}
+
+# The get_imgur_album() subroutine takes a URL for an imgur album (e.g. http://imgur.com/a/xyz). It uses the imgur api to retrive the details of the album, then downloads the images in the album.
+sub get_imgur_album{
+
+	if($IMGUR_ID eq 'disabled'){
+		return;
+	}
+
+	my $url = shift;
+
+	print "Getting imgur album $url\n";
+
+	my($gallery_id) = $url =~ /^.*imgur\.com\/a\/(.*)$/i; # The album ID is the unique identifier for each album.
+
+	$url = 'https://api.imgur.com/3/album/' . $gallery_id;
+
+	my $imgur_auth = 'Client-ID ' . $IMGUR_ID; # Construct the imgur auth header.
+
+	my $ua = LWP::UserAgent->new;
+
+	$ua->agent('Mozilla/5.0');
+
+	$ua->default_header('Authorization' => $imgur_auth);
+
+	my $response = $ua->get($url);
+
+	my $content;
+
+	if($response->is_success){
+		$content = $response->decoded_content;
+	}else{
+		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+		open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && return;
+		print FAILEDURLS "$url\n"; # Add the URL to the Failed URLs file if it fails.
+		close FAILEDRULS;
+		return;
+	}
+
+	my $json = JSON::XS->new->decode($content);
+
+	my $album_id = $json->{'data'}->{'id'};
+
+	foreach my $image (@{$json->{'data'}->{'images'}}){ # Loop through the images in the album.
+
+		my $filename = $album_id . '.' . fileparse($image->{'link'}); # Construct the filename in the form: <album ID>.<image ID>.<ext> This ensures that images from the same album will sort together.
+
+		$filename = filename_check($filename); # Check whether the filename exists in the destination. If so, append a pseudo-random string to the new filename.
+
+		print "\tDownloading $image->{'link'}\n";
+
+		my $ua = LWP::UserAgent->new;
+		$ua->agent('Mozilla/5.0');
+
+		$ua->default_header('Authorization' => $imgur_auth);
+
+		my $response = $ua->get($image->{'link'});
+
+		my $content;
+
+		if($response->is_success){
+			$content = $response->decoded_content;
+		}else{
+			print "\nERROR: Could not get $image->{'link'}\nHTTP Response: " . $response->status_line . "\n\n";
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+			print FAILEDURLS "$image->{'link'}\n";
+			close FAILEDRULS;
+			next;
+		}
+
+		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+		binmode IMAGE;
+		print IMAGE $content;
+		close IMAGE;
+	}
+}
+
+sub get_imgur_image{
+
+	if($IMGUR_ID eq 'disabled'){
+		return;
+	}
+
+	my $url = shift;
+
+	my @image_ids;
+
+	my($id) = fileparse($url);
+
+	if($id =~ /,/){
+		@image_ids = split(',', $id);
+	}else{
+		push(@image_ids, $id);
+	}
+
+	foreach my $image_id (@image_ids){
+		$image_id =~ s/(.*)\/?/$1/i;
+		$url = 'https://api.imgur.com/3/image/' . $image_id;
+
+		my $imgur_auth = 'Client-ID ' . $IMGUR_ID;
+
+		my $json_ua = LWP::UserAgent->new;
+		$json_ua->agent('Mozilla/5.0');
+
+		$json_ua->default_header('Authorization' => $imgur_auth);
+
+		my $json_response = $json_ua->get($url);
+
+		my $json_content;
+
+		if ($json_response->is_success) {
+			$json_content = $json_response->decoded_content;
+		}else{
+			print "\nERROR: Could not get $url\nHTTP Response: " . $json_response->status_line . "\n\n";
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && return;
+			print FAILEDURLS "$url\n";
+			close FAILEDRULS;
+			return;
+		}
+
+		my $json = JSON::XS->new->decode($json_content);
+
+		my $image_link = $json->{'data'}->{'link'};
+
+		my ($fn, $path, $suffix) = fileparse($image_link, @SUFFIXES);
+
+		my $filename = filename_check($fn . $suffix);	
+
+		print "Downloading $image_link\n";
+
+		my $image_ua = LWP::UserAgent->new;
+		$image_ua->agent('Mozilla/5.0');
+
+		$image_ua->default_header('Authorization' => $imgur_auth);
+
+		my $image_response = $image_ua->get($image_link);
+
+		my $image_content;
+
+		if($image_response->is_success){
+			$image_content = $image_response->decoded_content;
+		}else{
+			print "\nERROR: Could not get $image_link\nHTTP Response: " . $image_response->status_line . "\n\n";
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && return;
+			print FAILEDURLS "$image_link\n";
+			close FAILEDRULS;
+			return;
+		}
+
+		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && return;
+		binmode IMAGE;
+		print IMAGE $image_content;
+		close IMAGE;
+	}
+}
+
+sub check_tumblr_likes{
+	my $username = shift;
+	my $ua = OAuth::Consumer->new(
+		oauth_consumer_key => shift,
+		oauth_consumer_secret => shift,
+		oauth_token => shift,
+		oauth_token_secret => shift 
+		);
+
+	$ua->agent('Mozilla/5.0');
+
+	my $offset = 0;
+	my $limit = 1;
+
+	my $url = "http://api.tumblr.com/v2/user/likes?limit=$limit&offset=$offset";
+
+	my $response = $ua->get($url);
+
+	my $content;
+
+	if ($response->is_success) {
+		$content = $response->decoded_content;
+	}else{
+		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+		return 0;
+	}	
+
+	my $json = JSON::XS->new->decode($content);
+	
+	my $numlikes = $json->{'response'}->{'liked_count'};
+
+	return $numlikes;
+}
+
+sub get_tumblr_likes{
+	my $ua = OAuth::Consumer->new(
+		oauth_consumer_key => shift,
+		oauth_consumer_secret => shift,
+		oauth_token => shift,
+		oauth_token_secret => shift 
+		);
+
+	$ua->agent('Mozilla/5.0');
+
+	my $offset = shift;
+	my $limit = shift;
+
+	my $url = "http://api.tumblr.com/v2/user/likes?limit=$limit&offset=$offset";
+
+	my $response = $ua->get($url);
+
+	my $content;
+
+	if($response->is_success){
+		$content = $response->decoded_content;
+	}else{
+		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+	}
+	return $content;
+}
+
+sub download_tumblr_images{
+	my $content = shift;
+	my $json = JSON::XS->new->decode($content);
+
+	my $likes = \@{$json->{'response'}->{'liked_posts'}}; 
+
+	foreach my $like (@$likes){
+		my $photos = \@{$like->{'photos'}};
+		foreach my $photo (@$photos){
+			my $url = $photo->{'original_size'}->{'url'};
+			my $filename = fileparse($url);
+			print "Downloading $filename\n";
+			$filename = filename_check($filename);
+
+			my $image_ua = LWP::UserAgent->new;
+			$image_ua->agent('Mozilla/5.0');
+
+			my $image_response = $image_ua->get($url);
+
+			my $image_content;
+
+			if ($image_response->is_success) {
+				$image_content = $image_response->decoded_content;
+			}else{
+				print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+			print FAILEDURLS "$url\n";
+			close FAILEDRULS;
+				next;
+			}
+
+			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+			binmode IMAGE;
+			print IMAGE $image_content;
+			close IMAGE;
+		}
+	}
+}
+
+sub get_tumblr{
+
+	foreach my $account (@{$CONF->{'services'}->{'tumblr'}}){
+		
+		my $username = $account->{'username'};
+		my $consumer_key = $account->{'consumer_key'};
+		my $consumer_secret = $account->{'consumer_secret'};
+		my $token_key = $account->{'token_key'};
+		my $token_secret = $account->{'token_secret'};
+
+		print "\nGetting new tumblr likes for $username.\n";
+
+		my $likes_i_have = $TRACK->{'services'}->{'tumblr'}->{$username};
+
+		my $total_likes = check_tumblr_likes($username, $consumer_key, $consumer_secret, $token_key, $token_secret);
+
+		$TRACK->{'services'}->{'tumblr'}->{$username} = $total_likes;
+
+		my $new_likes = $total_likes - $likes_i_have;
+
+		if ($new_likes > 0){
+			print "$new_likes new likes to get for $username\n";
+			
+			my $likes_per_page = 20;
+			my $pages = int($new_likes / $likes_per_page);
+			my $remainder = $new_likes % $likes_per_page;
+			my $offset = 0;
+
+			for( my $page = 1 ; $page<=$pages; $page++){
+				download_tumblr_images(get_tumblr_likes($consumer_key, $consumer_secret, $token_key, $token_secret, $offset, $likes_per_page));
+				$offset += $likes_per_page;
+			}
+
+			if($remainder > 0){
+				download_tumblr_images(get_tumblr_likes($consumer_key, $consumer_secret, $token_key, $token_secret, $offset, $remainder));
+			}
+		}else{
+			print "No new likes to get for $username.\n"
+		}
+	}
+}
+
+sub check_delicious_bookmarks{
+	my $username = shift;
+	my $password = shift;
+	my $lastretrieve = shift;
+
+	my($last_ymd, $last_hms) = $lastretrieve =~ /(.*)T(.*)Z/;
+	my($last_y, $last_mo, $last_d) = $last_ymd =~ /(.*)-(.*)-(.*)/;
+	my($last_h, $last_mi, $last_s) = $last_hms =~ /(.*):(.*):(.*)/;
+
+	my $last = DateTime->new(
+		year => $last_y,
+		month => $last_mo,
+		day => $last_d,
+		hour => $last_h,
+		minute => $last_mi,
+		second => $last_s,
+		time_zone => 'UTC'
+	);
+
+	my $url = 'https://' . $username . ':' . $password . '@api.del.icio.us/v1/posts/update';
+
+	my $ua = LWP::UserAgent->new;
+	$ua->agent('Mozilla/5.0');
+
+	my $response = $ua->get($url);
+
+	my $content; 
+
+	if ($response->is_success){
+		$content = $response->decoded_content;
+	}else{
+		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+		return 0;
+	}
+
+	my $xml = new XML::Simple->XMLin($content);
+
+	my($current_ymd, $current_hms) = $xml->{'time'} =~ /(.*)T(.*)Z/;
+	my($current_y, $current_mo, $current_d) = $current_ymd =~ /(.*)-(.*)-(.*)/;
+	my($current_h, $current_mi, $current_s) = $current_hms =~ /(.*):(.*):(.*)/;
+
+	my $current = DateTime->new(
+		year => $current_y,
+		month => $current_mo,
+		day => $current_d,
+		hour => $current_h,
+		minute => $current_mi,
+		second => $current_s,
+		time_zone => 'UTC'
+	);
+
+	my $difference = $current->subtract_datetime_absolute($last);
+
+	if ($difference->is_positive()){
+		return 1;
+	}else{
+		return 0;
+	}
+}
+
+sub get_delicious_bookmarks{
+	my $username = shift;
+	my $password = shift;
+	my $lastretrieve = shift;
+	my $url = 'https://' . $username . ':' . $password . '@api.del.icio.us/v1/json/posts/all?&fromdt=' . $lastretrieve;
+	my $ua = LWP::UserAgent->new;
+	$ua->agent('Mozilla/5.0');
+	my $response = $ua->get($url);
+	my $content; 
+	if($response->is_success){
+		$content = $response->decoded_content;
+	}else{
+		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+		return;
+	}
+	my $json = JSON::XS->new->decode($content);
+	return $json;
+}
+
+sub download_delicious_images{
+
+	my $json = shift;
+
+	foreach my $post (@{$json->{'posts'}}){
+
+		my $url = $post->{'post'}->{'href'};
+		my ($fn, $path, $suffix) = fileparse($url, @SUFFIXES);
+
+		if($url =~ /imgur\.com\/a\//i){
+			get_imgur_album($url);
+		}
+		elsif ( $suffix ){
+			my $filename = filename_check($fn . $suffix);
+			print "Downloading $url\n";
+
+			my $image_ua = LWP::UserAgent->new;
+			$image_ua->agent('Mozilla/5.0');
+
+			my $image_response = $image_ua->get($url);
+
+			my $image_content;
+
+			if ($image_response->is_success) {
+				$image_content = $image_response->decoded_content;
+			}else{
+				print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+			print FAILEDURLS "$url\n";
+			close FAILEDRULS;
+				next;
+			}
+
+			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+			binmode IMAGE;
+			print IMAGE $image_content;
+			close IMAGE;
+		}
+		elsif($url =~ /imgur\.com\//i){
+			get_imgur_image($url);
+		}else{
+			print "Adding non-image url $url\n";
+			add_nonimage_url($url);
+		}
+	}
+}
+
+sub get_delicious{
+	foreach my $account (@{$CONF->{'services'}->{'delicious'}}){
+
+		my $username = $account->{'username'};
+		my $password = $account->{'password'};
+
+		print "\nGetting new delicious bookmarks for $username\n";
+
+		my $lastretrieve = $TRACK->{'services'}->{'delicious'}->{$username};
+
+		my $now = DateTime->now( time_zone => 'UTC' );
+		my $ymd = $now->ymd;
+		my $hms = $now->hms;
+		my $current_time = $ymd . "T" . $hms . "Z";
+
+		$TRACK->{'services'}->{'delicious'}->{$username} = $current_time;
+
+		if(check_delicious_bookmarks($username, $password, $lastretrieve)){
+			download_delicious_images(get_delicious_bookmarks($username, $password, $lastretrieve));
+		}else{
+			print "There are no new delicious bookmarks for $username.\n";
+		}
+	}
+}
+
+sub check_reddit_saved{
+	my $url = shift;
+	my $ua = LWP::UserAgent->new;
+	$ua->agent('Mozilla/5.0');
+	my $response = $ua->get($url);
+	my $content; 
+	if ($response->is_success){
+		$content = $response->decoded_content;
+	}else{
+		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+	}
+
+	my $json = JSON::XS->new->decode($content);
+
+	my $before = $json->{'data'}->{'children'}->[0]->{'data'}->{'name'};
+	
+	return($before, $json);
+}
+
+sub download_reddit_images{
+	my $json = shift;
+	foreach my $item (@{$json->{'data'}->{'children'}}){
+
+		my $url = $item->{'data'}->{'url'};
+
+		my ($fn, $path, $suffix) = fileparse($url, @SUFFIXES);
+
+		if($url =~ /imgur\.com\/a\//i){
+			get_imgur_album($url);
+		}
+		elsif( $suffix ){
+			my $filename = filename_check($fn . $suffix);
+			print "Downloading $url\n";
+
+			my $image_ua = LWP::UserAgent->new;
+			$image_ua->agent('Mozilla/5.0');
+
+			my $image_response = $image_ua->get($url);
+
+			my $image_content;
+
+			if ($image_response->is_success) {
+				$image_content = $image_response->decoded_content;
+			}else{
+				print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+			print FAILEDURLS "$url\n";
+			close FAILEDRULS;
+				next;
+			}
+
+			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+			binmode IMAGE;
+			print IMAGE $image_content;
+			close IMAGE;
+
+		}
+		elsif($url =~ /imgur\.com\//i){
+			get_imgur_image($url);
+		}else{
+			print "Adding non-image url $url\n";
+			add_nonimage_url($url);
+		}
+	}
+}
+
+sub get_reddit{
+
+	foreach my $account (@{$CONF->{'services'}->{'reddit'}}){
+
+		my $url = $account->{'rss_url'};
+		my $username = $account->{'username'};
+
+		print "\nGetting Reddit saved links for $username.\n";
+
+		my $lastid = $TRACK->{'services'}->{'reddit'}->{$username};
+		my $before = $lastid;
+
+		while($before){
+			my $fetchurl = $url . '&limit=100&before=' . $before;
+			my @results = check_reddit_saved($fetchurl);
+			if($results[0]){
+				$before = $results[0];
+				download_reddit_images($results[1]);
+			}
+			else{
+				if($before eq $lastid){
+					print "No new saved links to get for $username\n";
+					last;
+				}
+				else{
+					$TRACK->{'services'}->{'reddit'}->{$username} = $before;
+					$before = '';
+				}
+			}
+		}
+	}
+}
+
+# MAIN
+
+if(!-e $conf_file || (!$CONF->{'destination'} || !$CONF->{'nonimage_file'} || !$CONF->{'imgur_auth_id'})){
+	first_run();
+}else{
+}
+
+# Check the environment to make sure it's sane.
+check_env();
+
+# Get tumblr likes.
+if($CONF->{'services'}->{'tumblr'}){
+	get_tumblr();
+}else{
+	add_tumblr();
+	get_tumblr();
+}
+
+# Get del.icio.us bookmarks.
+if($CONF->{'services'}->{'delicious'}){
+	get_delicious();
+}else{
+	add_delicious();
+	get_delicious();
+}
+
+# Get Reddit saved links.
+if($CONF->{'services'}->{'reddit'}){
+	get_reddit();
+}else{
+	add_reddit();
+	get_reddit();
+}
+
+if($CONF_UPDATE){
+	my $new_conf = JSON::XS->new->pretty(1)->encode($CONF);
+	open(CONFIGURATION, '>', $conf_file) || die "Cannot write configuration to $conf_file: $!\n";
+	print CONFIGURATION $new_conf;
+	close CONFIGURATION;
+}
+
+my $new_tracking = JSON::XS->new->pretty(1)->encode($TRACK);
+
+open(TRACKING, '>', $track_file) || print "Could not open $track_file: $!\n" && exit;
+
+print TRACKING $new_tracking;
+
+close TRACKING;
+
+print "\nAll done.\n\n";
