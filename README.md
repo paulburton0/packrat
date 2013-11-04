@@ -34,13 +34,8 @@ Once your environment is all set up, you're ready to run packrat. No installatio
 
 ## Usage
 
-<<<<<<< HEAD
 `packrat [-qrc: /path/to/config]`   
 `packrat [-s]`
-=======
-`packrat [-qrc: /path/to/config]`
-`packrat [-s]
->>>>>>> 10bd63dc9ac1dcd8ebda032775d62bd65179fc2f
 
 There are four command line options that you can use with packrat:
 
