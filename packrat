@@ -8,14 +8,15 @@ use XML::Simple;	# Used to parse the result received when querying del.icio.us f
 use LWP::UserAgent;	# Used to fetch JSON from apis and download images.
 use OAuth::Consumer;# Used to fetch JSON from tumblr.
 use File::Basename;	# Used to parse the filename, extension, and the rest of the URI from URLs.
-#use File::Copy;		# Used to copy files.
 use File::Path qw(make_path); # Used to create directory trees.
 use Env qw(HOME);	# Used to retreive the $HOME environment variable.
 use File::Slurp;	# Used to read the .packrat.conf file.
 use DateTime;		# Used to parse and create date/time strings and perform date/time arithemtic when working with the del.icio.us api.
+use Getopt::Std;    # Used to process command line options.
 
 use strict;
-#use warnings;
+
+our($opt_q, $opt_s, $opt_r, $opt_c);
 
 my $conf_file = "$HOME/.packrat.conf";
 
@@ -27,6 +28,7 @@ my $NONIMAGEFILE;
 my $FAILEDURLS;
 my $IMGUR_ID;
 my $TRACK;
+my $TRACK_FILE;
 my @SUFFIXES = ('jpeg', 'jpg', 'png', 'gif', 'bmp', 'tif', 'tiff'); # The list of image extensions we will be saving.
 
 if(-e $conf_file){
@@ -43,10 +45,10 @@ if(-e $conf_file){
 # The track file is a json file that packrat creates and maintains.
 # It contains the information that packrat needs to keep track of which 
 # posts have been fetched and which are new.
-my $track_file = "$HOME/Dropbox/.packrat/packrat.track";
+$TRACK_FILE = $CONF->{'track_file'};
 
-if(-e $track_file){
-	my $tracking = read_file($track_file);
+if(-e $TRACK_FILE){
+	my $tracking = read_file($TRACK_FILE);
 	$TRACK = JSON::XS->new->decode($tracking);
 }
 
@@ -54,14 +56,20 @@ if(-e $track_file){
 sub check_env{
 	# Check whether the detination directory is writeable.
 	if (!-w $DESTINATION){
-		print "Cannot write to $DESTINATION. Exiting.\n";
-		exit 0;
+        if(!$opt_s){
+            print "Cannot write to $DESTINATION. Exiting.\n";
+        }
+        exit 0;
 	}
 
 	# If the destination does not exist, create it.
 	if (!-e $DESTINATION){
-		print "$DESTINATION does not exist. Creating it.\n";
-		make_path $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit 0;
+        
+        if(!$opt_s){
+            print "$DESTINATION does not exist. Creating it.\n";
+        }
+
+		make_path $DESTINATION || print "Cannot create $DESTINATION: $!\n" unless $opt_s && exit 0;
 	}
 }
 
@@ -71,56 +79,54 @@ sub first_run{
 	print "\nWelcome to packrat. Let's get some configuration details\n";
 	print "so that packrat will work for you.\n";
 
-	if(!$DESTINATION){
-		print "\nWhere do you want to save image files that packrat downloads? [$HOME/packrat] ";
-		$DESTINATION = <STDIN>;
-		chomp($DESTINATION);
-		if(!$DESTINATION){
-			$DESTINATION = "$HOME/packrat";
-		}
+    print "\nWhere do you want to save image files that packrat downloads? [$HOME/packrat] ";
+    $DESTINATION = <STDIN>;
+    chomp($DESTINATION);
+    if(!$DESTINATION){
+        $DESTINATION = "$HOME/packrat";
+    }
 
-		$CONF->{'destination'} = $DESTINATION;
-		mkdir $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit;
-	}
+    $CONF->{'destination'} = $DESTINATION;
+    mkdir $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit;
 
-	if(!-e "$HOME/.packrat"){
-		mkdir "$HOME/.packrat" || print "Cannot create directory $HOME/.packrat: $!\n" && exit;
-	}
+if(!-e "$HOME/.packrat"){
+    mkdir "$HOME/.packrat" || print "Cannot create directory $HOME/.packrat: $!\n" && exit;
+}
 
-	if(!$NONIMAGEFILE){
-		print "\nWhere should packrat save URLs that aren't direct image links? [$HOME/.packrat/nonimages] ";
+    print "\nWhere should packrat save URLs that aren't direct image links? [$HOME/.packrat/nonimages] ";
 
-		$NONIMAGEFILE = <STDIN>;
-		chomp($NONIMAGEFILE);
+    $NONIMAGEFILE = <STDIN>;
+    chomp($NONIMAGEFILE);
 
-		if(!$NONIMAGEFILE){
-			$NONIMAGEFILE= "$HOME/.packrat/nonimages";
-		}
+    if(!$NONIMAGEFILE){
+        $NONIMAGEFILE= "$HOME/.packrat/nonimages";
+    }
 
-		$CONF->{'nonimage_file'} = $NONIMAGEFILE;
-	}
+    $CONF->{'nonimage_file'} = $NONIMAGEFILE;
 
-	if(!$FAILEDURLS){
-		my($filename, $directory) = fileparse($NONIMAGEFILE);
+    my($filename, $directory) = fileparse($NONIMAGEFILE);
 
-		$FAILEDURLS = $directory . 'failedurls'; 
+    $FAILEDURLS = $directory . 'failedurls'; 
 
-		$CONF->{'failed_urls_file'} = $FAILEDURLS;
-	}
+    $CONF->{'failed_urls_file'} = $FAILEDURLS;
 
-	if(!$IMGUR_ID){
+    my($filename, $directory) = fileparse($NONIMAGEFILE);
 
-				print "\nLog on to http://imgur.com, then navigate to https://api.imgur.com/oauth2/addclient and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here.\nJust leave this blank if you don't want to use imgur.\n";
-		print "Imgur.com Client ID: ";
-		$IMGUR_ID = <STDIN>;
-		chomp($IMGUR_ID);
+    $TRACK_FILE = $directory . 'packrat.track'; 
 
-		if($IMGUR_ID eq ''){
-			$IMGUR_ID = 'disabled';
-		}
+    $CONF->{'track_file'} = $TRACK_FILE;
 
-		$CONF->{'imgur_auth_id'} = $IMGUR_ID;
-	}
+
+    print "\nLog on to http://imgur.com, then navigate to https://api.imgur.com/oauth2/addclient and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here.\nJust leave this blank if you don't want to use imgur.\n";
+    print "Imgur.com Client ID: ";
+    $IMGUR_ID = <STDIN>;
+    chomp($IMGUR_ID);
+
+    if($IMGUR_ID eq ''){
+        $IMGUR_ID = 'disabled';
+    }
+
+    $CONF->{'imgur_auth_id'} = $IMGUR_ID;
 
 	my $new_conf = JSON::XS->new->pretty(1)->encode($CONF);
 	open(CONFIGURATION, '>', $conf_file) || print "Cannot write configuration to $conf_file: $!\n" && exit;
@@ -353,7 +359,7 @@ sub add_reddit{
 sub add_nonimage_url{
 	my $url = shift;
 
-	open(NONIMAGES, '>>', $NONIMAGEFILE) || print "Cannot write to $NONIMAGEFILE: $!\n" && return;
+	open(NONIMAGES, '>>', $NONIMAGEFILE) || print "Cannot write to $NONIMAGEFILE: $!\n" unless $opt_s && return;
 	print NONIMAGES $url . "\n";
 	close NONIMAGES;
 }
@@ -397,7 +403,9 @@ sub get_imgur_album{
 
 	my $url = shift;
 
-	print "Getting imgur album $url\n";
+	if(!$opt_q && !$opt_s){
+        print "Getting imgur album $url\n";
+    }
 
 	my($gallery_id) = $url =~ /^.*imgur\.com\/a\/(.*)$/i; # The album ID is the unique identifier for each album.
 
@@ -418,8 +426,12 @@ sub get_imgur_album{
 	if($response->is_success){
 		$content = $response->decoded_content;
 	}else{
-		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
-		open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && return;
+
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        }
+        
+		open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && return;
 		print FAILEDURLS "$url\n"; # Add the URL to the Failed URLs file if it fails.
 		close FAILEDRULS;
 		return;
@@ -435,7 +447,9 @@ sub get_imgur_album{
 
 		$filename = filename_check($filename); # Check whether the filename exists in the destination. If so, append a pseudo-random string to the new filename.
 
-		print "\tDownloading $image->{'link'}\n";
+		if(!$opt_q && !$opt_s){
+            print "\tDownloading $image->{'link'}\n";
+        }
 
 		my $ua = LWP::UserAgent->new;
 		$ua->agent('Mozilla/5.0');
@@ -449,14 +463,16 @@ sub get_imgur_album{
 		if($response->is_success){
 			$content = $response->decoded_content;
 		}else{
-			print "\nERROR: Could not get $image->{'link'}\nHTTP Response: " . $response->status_line . "\n\n";
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+            if(!$opt_s){
+                print "\nERROR: Could not get $image->{'link'}\nHTTP Response: " . $response->status_line . "\n\n";
+            }
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
 			print FAILEDURLS "$image->{'link'}\n";
 			close FAILEDRULS;
 			next;
 		}
 
-		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
 		binmode IMAGE;
 		print IMAGE $content;
 		close IMAGE;
@@ -500,8 +516,11 @@ sub get_imgur_image{
 		if ($json_response->is_success) {
 			$json_content = $json_response->decoded_content;
 		}else{
-			print "\nERROR: Could not get $url\nHTTP Response: " . $json_response->status_line . "\n\n";
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && return;
+            if(!$opt_s){
+                print "\nERROR: Could not get $url\nHTTP Response: " . $json_response->status_line . "\n\n";
+            }
+            
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && return;
 			print FAILEDURLS "$url\n";
 			close FAILEDRULS;
 			return;
@@ -515,7 +534,9 @@ sub get_imgur_image{
 
 		my $filename = filename_check($fn . $suffix);	
 
-		print "Downloading $image_link\n";
+		if(!$opt_q && !$opt_s){
+            print "Downloading $image_link\n";
+        }
 
 		my $image_ua = LWP::UserAgent->new;
 		$image_ua->agent('Mozilla/5.0');
@@ -529,14 +550,17 @@ sub get_imgur_image{
 		if($image_response->is_success){
 			$image_content = $image_response->decoded_content;
 		}else{
-			print "\nERROR: Could not get $image_link\nHTTP Response: " . $image_response->status_line . "\n\n";
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && return;
+            if(!$opt_s){
+                print "\nERROR: Could not get $image_link\nHTTP Response: " . $image_response->status_line . "\n\n";
+            }
+
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && return;
 			print FAILEDURLS "$image_link\n";
 			close FAILEDRULS;
 			return;
 		}
 
-		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && return;
+		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && return;
 		binmode IMAGE;
 		print IMAGE $image_content;
 		close IMAGE;
@@ -567,7 +591,9 @@ sub check_tumblr_likes{
 	if ($response->is_success) {
 		$content = $response->decoded_content;
 	}else{
-		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        }
 		return 0;
 	}	
 
@@ -601,7 +627,9 @@ sub get_tumblr_likes{
 	if($response->is_success){
 		$content = $response->decoded_content;
 	}else{
-		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        }
 	}
 	return $content;
 }
@@ -618,7 +646,9 @@ sub download_tumblr_images{
 		foreach my $photo (@$photos){
 			my $url = $photo->{'original_size'}->{'url'};
 			my $filename = fileparse($url);
-			print "Downloading $filename\n";
+            if(!$opt_q && !$opt_s){
+                print "Downloading $filename\n";
+            }
 			$filename = filename_check($filename);
 
 			my $image_ua = LWP::UserAgent->new;
@@ -631,14 +661,16 @@ sub download_tumblr_images{
 			if ($image_response->is_success) {
 				$image_content = $image_response->decoded_content;
 			}else{
-				print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+                if(!$opt_s){
+                    print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+                }
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
 			print FAILEDURLS "$url\n";
 			close FAILEDRULS;
 				next;
 			}
 
-			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
 			binmode IMAGE;
 			print IMAGE $image_content;
 			close IMAGE;
@@ -657,7 +689,9 @@ sub get_tumblr{
 		my $token_key = $account->{'token_key'};
 		my $token_secret = $account->{'token_secret'};
 
-		print "\nGetting new tumblr likes for $username.\n";
+		if(!$opt_q && !$opt_s){
+            print "\nGetting new tumblr likes for $username.\n";
+        }
 
 		my $likes_i_have = $TRACK->{'services'}->{'tumblr'}->{$username};
 
@@ -668,7 +702,9 @@ sub get_tumblr{
 		my $new_likes = $total_likes - $likes_i_have;
 
 		if ($new_likes > 0){
-			print "$new_likes new likes to get for $username\n";
+			if(!$opt_q && !$opt_s){
+                print "$new_likes new likes to get for $username\n";
+            }
 			
 			my $likes_per_page = 20;
 			my $pages = int($new_likes / $likes_per_page);
@@ -684,7 +720,9 @@ sub get_tumblr{
 				download_tumblr_images(get_tumblr_likes($consumer_key, $consumer_secret, $token_key, $token_secret, $offset, $remainder));
 			}
 		}else{
-			print "No new likes to get for $username.\n"
+			if(!$opt_q && !$opt_s){
+                print "No new likes to get for $username.\n"
+            }
 		}
 	}
 }
@@ -721,7 +759,10 @@ sub check_delicious_bookmarks{
 	if ($response->is_success){
 		$content = $response->decoded_content;
 	}else{
-		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        }
+
 		return 0;
 	}
 
@@ -763,7 +804,10 @@ sub get_delicious_bookmarks{
 	if($response->is_success){
 		$content = $response->decoded_content;
 	}else{
-		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        }
+
 		return;
 	}
 	my $json = JSON::XS->new->decode($content);
@@ -785,7 +829,9 @@ sub download_delicious_images{
 		}
 		elsif ( $suffix ){
 			my $filename = filename_check($fn . $suffix);
-			print "Downloading $url\n";
+			if(!$opt_q && !$opt_s){
+                print "Downloading $url\n";
+            }
 
 			my $image_ua = LWP::UserAgent->new;
 			$image_ua->agent('Mozilla/5.0');
@@ -797,14 +843,17 @@ sub download_delicious_images{
 			if ($image_response->is_success) {
 				$image_content = $image_response->decoded_content;
 			}else{
-				print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+                if(!$opt_s){
+                    print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+                }
+
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
 			print FAILEDURLS "$url\n";
 			close FAILEDRULS;
 				next;
 			}
 
-			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
 			binmode IMAGE;
 			print IMAGE $image_content;
 			close IMAGE;
@@ -812,7 +861,9 @@ sub download_delicious_images{
 		elsif($url =~ /imgur\.com\//i){
 			get_imgur_image($url);
 		}else{
-			print "Adding non-image url $url\n";
+			if(!$opt_q && !$opt_s){
+                print "Adding non-image url $url\n";
+            }
 			add_nonimage_url($url);
 		}
 	}
@@ -825,7 +876,9 @@ sub get_delicious{
 		my $username = $account->{'username'};
 		my $password = $account->{'password'};
 
-		print "\nGetting new delicious bookmarks for $username\n";
+		if(!$opt_q && !$opt_s){
+            print "\nGetting new delicious bookmarks for $username\n";
+        }
 
 		my $lastretrieve = $TRACK->{'services'}->{'delicious'}->{$username};
 
@@ -839,7 +892,9 @@ sub get_delicious{
 		if(check_delicious_bookmarks($username, $password, $lastretrieve)){
 			download_delicious_images(get_delicious_bookmarks($username, $password, $lastretrieve));
 		}else{
-			print "There are no new delicious bookmarks for $username.\n";
+			if(!$opt_q && !$opt_s){
+                print "There are no new delicious bookmarks for $username.\n";
+            }
 		}
 	}
 }
@@ -854,7 +909,9 @@ sub check_reddit_saved{
 	if ($response->is_success){
 		$content = $response->decoded_content;
 	}else{
-		print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
+        }
 	}
 
 	my $json = JSON::XS->new->decode($content);
@@ -878,7 +935,9 @@ sub download_reddit_images{
 		}
 		elsif( $suffix ){
 			my $filename = filename_check($fn . $suffix);
-			print "Downloading $url\n";
+			if(!$opt_q && !$opt_s){
+                print "Downloading $url\n";
+            }
 
 			my $image_ua = LWP::UserAgent->new;
 			$image_ua->agent('Mozilla/5.0');
@@ -890,14 +949,17 @@ sub download_reddit_images{
 			if ($image_response->is_success) {
 				$image_content = $image_response->decoded_content;
 			}else{
-				print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" && next;
+                if(!$opt_s){
+                    print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+                }
+			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
+
 			print FAILEDURLS "$url\n";
 			close FAILEDRULS;
 				next;
 			}
 
-			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" && next;
+			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
 			binmode IMAGE;
 			print IMAGE $image_content;
 			close IMAGE;
@@ -906,7 +968,9 @@ sub download_reddit_images{
 		elsif($url =~ /imgur\.com\//i){
 			get_imgur_image($url);
 		}else{
-			print "Adding non-image url $url\n";
+			if(!$opt_q && !$opt_s){
+                print "Adding non-image url $url\n";
+            }
 			add_nonimage_url($url);
 		}
 	}
@@ -920,7 +984,9 @@ sub get_reddit{
 		my $url = $account->{'rss_url'};
 		my $username = $account->{'username'};
 
-		print "\nGetting Reddit saved links for $username.\n";
+		if(!$opt_q && !$opt_s){
+            print "\nGetting Reddit saved links for $username.\n";
+        }
 
 		my $lastid = $TRACK->{'services'}->{'reddit'}->{$username};
 		my $before = $lastid;
@@ -934,7 +1000,9 @@ sub get_reddit{
 			}
 			else{
 				if($before eq $lastid){
-					print "No new saved links to get for $username\n";
+					if(!$opt_q && !$opt_s){
+                        print "No new saved links to get for $username\n";
+                    }
 					last;
 				}
 				else{
@@ -947,10 +1015,23 @@ sub get_reddit{
 }
 
 # MAIN
+getopts('qsrc:');
 
-if(!-e $conf_file || (!$CONF->{'destination'} || !$CONF->{'nonimage_file'} || !$CONF->{'imgur_auth_id'})){
+if($opt_c){
+    if(-e $opt_c){
+        $conf_file = $opt_c;
+    }else{
+        if(!$opt_s){
+            print "Cannot read packrat configuration file $opt_c\n";
+        }
+
+        exit;
+    }
+}
+
+if(!-e $conf_file || $opt_r){
+    $CONF = {};
 	first_run();
-}else{
 }
 
 # Check the environment to make sure it's sane.
@@ -959,40 +1040,33 @@ check_env();
 # Get tumblr likes.
 if($CONF->{'services'}->{'tumblr'}){
 	get_tumblr();
-}else{
-	add_tumblr();
-	get_tumblr();
 }
 
 # Get del.icio.us bookmarks.
 if($CONF->{'services'}->{'delicious'}){
-	get_delicious();
-}else{
-	add_delicious();
 	get_delicious();
 }
 
 # Get Reddit saved links.
 if($CONF->{'services'}->{'reddit'}){
 	get_reddit();
-}else{
-	add_reddit();
-	get_reddit();
 }
 
 if($CONF_UPDATE){
 	my $new_conf = JSON::XS->new->pretty(1)->encode($CONF);
-	open(CONFIGURATION, '>', $conf_file) || die "Cannot write configuration to $conf_file: $!\n";
+	open(CONFIGURATION, '>', $conf_file) || print "Cannot write configuration to $conf_file: $!\n" unless $opt_s && exit;
 	print CONFIGURATION $new_conf;
 	close CONFIGURATION;
 }
 
 my $new_tracking = JSON::XS->new->pretty(1)->encode($TRACK);
 
-open(TRACKING, '>', $track_file) || print "Could not open $track_file: $!\n" && exit;
+open(TRACKING, '>', $CONF->{'track_file'}) || print "Could not open $CONF->{'track_file'}: $!\n" unless $opt_s && exit;
 
 print TRACKING $new_tracking;
 
 close TRACKING;
 
-print "\nAll done.\n\n";
+if(!$opt_q && !$opt_s){
+    print "\nAll done.\n\n";
+}
