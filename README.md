@@ -32,6 +32,17 @@ File::Basename is included with the standard Perl 5 installation. The others are
 
 Once your environment is all set up, you're ready to run packrat. No installation is necessary. The first time you run packrat, you will be guided through the process of configuring it and granting access to your online accounts. All the necessary configuration files will be created where you tell packrat to create them.
 
+## Usage
+
+`packrat [-qrc: /path/to/config]`   
+`packrat [-s]`
+
+There are four command line options that you can use with packrat:
+
+* q - Supresses the normal "Checking" and "Downloading" messages that normally print when packrat is running. Errors (such as local file access errors or download failures) are still printed.
+* s - Packrat runs completely silently. No errors or status messages are displayed at all.
+* r - Forces the first-run configuration assistant to run.
+* c - Specifies the configuration file to use. This option takes an argument in the form of a path to a configuration file.
 
 ## Bugs
 
