@@ -1,7 +1,7 @@
 packrat
 =======
 
-Archives images from your Reddit.com saved links, del.icio.us bookmarks, and tumblr favorites.
+Archives images from your Reddit saved links, del.icio.us bookmarks, and Tumblr likes.
 
 ## Features
 
