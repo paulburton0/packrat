@@ -13,7 +13,7 @@ Archives images from your Reddit.com saved links, del.icio.us bookmarks, and tum
 
 ### Prerequisites
 
-Packrat is a perl script, so you must have perl installed on your system. Packrat has been tested with per 5 in cygwin, windows (ActiveState), and linux (Ubuntu and Slackware) environments.
+Packrat is a perl script, so you must have perl installed on your system. Packrat has been tested with Perl 5 in cygwin, windows (ActiveState), and linux (Ubuntu and Slackware) environments.
 
 Once you have perl installed, there are a few perl modules that you'll need prior to running packrat:
 
@@ -36,5 +36,4 @@ Once your environment is all set up, you're ready to run packrat. No installatio
 ## Bugs
 
 Many, I'm sure. If you run across something, or if you have a suggestion, please open a bug or enhacement request at the [github page](https://github.com/paulburton0/packrat/issues), or email me at <paulburton0+packrat@gmail.com>.
-
 
