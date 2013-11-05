@@ -52,6 +52,23 @@ if(-e $TRACK_FILE){
 	$TRACK = JSON::XS->new->decode($tracking);
 }
 
+$Getopt::Std::STANDARD_HELP_VERSION = 1;
+
+# The HELP_MESSAGE() subroutine prints the usage and options of packrat and exits.
+sub HELP_MESSAGE{
+    print "\nPackrat archives images from your Reddit saved links, del.icio.us bookmarks, and Tumblr likes.\n\n";
+    print "Usage:\n";
+    print "packrat\n";
+    print "packrat -r\n";
+    print "packrat -sc /path/to/conffile.conf\n\n";
+    print "Options\n";
+    print "q\tSupresses the normal \"Checking\" and \"Downloading\" messages that normally print when packrat is running. Errors (such as local file access errors or download failures) are still printed.\n";
+    print "s\tPackrat runs completely silently. No errors or status messages are displayed at all.\n";
+    print "r\tForces the first-run configuration assistant to run.\n";
+    print "c\tSpecifies the configuration file to use. This option takes an argument in the form of a path to a configuration file.\n\n";
+    exit;
+}
+
 # The check_env() subroutine does a basic check of the environment to make sure packrat can run without any major errors.
 sub check_env{
 	# Check whether the detination directory is writeable.
@@ -89,9 +106,9 @@ sub first_run{
     $CONF->{'destination'} = $DESTINATION;
     mkdir $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit;
 
-if(!-e "$HOME/.packrat"){
-    mkdir "$HOME/.packrat" || print "Cannot create directory $HOME/.packrat: $!\n" && exit;
-}
+    if(!-e "$HOME/.packrat"){
+        mkdir "$HOME/.packrat" || print "Cannot create directory $HOME/.packrat: $!\n" && exit;
+    }
 
     print "\nWhere should packrat save URLs that aren't direct image links? [$HOME/.packrat/nonimages] ";
 
@@ -127,6 +144,10 @@ if(!-e "$HOME/.packrat"){
     }
 
     $CONF->{'imgur_auth_id'} = $IMGUR_ID;
+
+    add_tumblr();
+    add_delicious();
+    add_reddit();
 
 	my $new_conf = JSON::XS->new->pretty(1)->encode($CONF);
 	open(CONFIGURATION, '>', $conf_file) || print "Cannot write configuration to $conf_file: $!\n" && exit;
