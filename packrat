@@ -1031,6 +1031,8 @@ sub get_reddit{
 					$before = '';
 				}
 			}
+
+            sleep(2); # Don't query the Reddit API too often.
 		}
 	}
 }
