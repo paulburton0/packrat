@@ -2,6 +2,8 @@
 
 # Packrat is a tool that locally archives images that have been saved on reddit.com, liked on tumblr.com, or bookmarked on del.icio.us. Packrat supports multiple accounts on each of these sites. 
 
+# You can find the latest vesion of packrat at https://github.com/paulburton0/packrat. If you have ideas or run across bugs, please report them in the GitHub issue tracker.
+
 # Include perl modules
 use JSON::XS; 		# Used for processing JSON results received from web apis and for reading and writing the .packrat.conf file.
 use XML::Simple;	# Used to parse the result received when querying del.icio.us for new bookmarks.
@@ -9,18 +11,20 @@ use LWP::UserAgent;	# Used to fetch JSON from apis and download images.
 use OAuth::Consumer;# Used to fetch JSON from tumblr.
 use File::Basename;	# Used to parse the filename, extension, and the rest of the URI from URLs.
 use File::Path qw(make_path); # Used to create directory trees.
-use Env qw(HOME);	# Used to retreive the $HOME environment variable.
+use Env qw(HOME USERPROFILE);	# Used to retreive the $HOME environment variable.
 use File::Slurp;	# Used to read the .packrat.conf file.
 use DateTime;		# Used to parse and create date/time strings and perform date/time arithemtic when working with the del.icio.us api.
 use Getopt::Std;    # Used to process command line options.
+use Browser::Open qw(open_browser_cmd open_browser); 
 
 use strict;
 
 our($opt_q, $opt_s, $opt_r, $opt_c);
 
-my $conf_file = "$HOME/.packrat.conf";
 
-# Constants that should be available in the boradest scope possible.
+# Constants that should be available in the broadest scope possible.
+my $VERSION = '0.1';
+my $USERAGENT = 'Packrat Image Archiver/' . $VERSION;
 my $CONF_UPDATE = 0;
 my $CONF;
 my $DESTINATION;
@@ -30,6 +34,15 @@ my $IMGUR_ID;
 my $TRACK;
 my $TRACK_FILE;
 my @SUFFIXES = ('jpeg', 'jpg', 'png', 'gif', 'bmp', 'tif', 'tiff'); # The list of image extensions we will be saving.
+my $BROWSER_CMD = open_browser_cmd();
+my $DIR_SEPARATOR = '/';
+
+unless($ENV{"HOME"}){
+    $HOME = $ENV{"USERPROFILE"};
+    $DIR_SEPARATOR = '\\';
+}
+
+my $conf_file = $HOME . $DIR_SEPARATOR . ".packrat.conf";
 
 if(-e $conf_file){
 	my $configuration = read_file($conf_file);
@@ -60,7 +73,7 @@ sub HELP_MESSAGE{
     print "Usage:\n";
     print "packrat\n";
     print "packrat -r\n";
-    print "packrat -sc /path/to/conffile.conf\n\n";
+    print "packrat -sc " . $DIR_SEPARATOR . "path" . $DIR_SEPARATOR . "to" . $DIR_SEPARATOR . "conffile.conf\n\n";
     print "Options\n";
     print "q\tSupresses the normal \"Checking\" and \"Downloading\" messages that normally print when packrat is running. Errors (such as local file access errors or download failures) are still printed.\n";
     print "s\tPackrat runs completely silently. No errors or status messages are displayed at all.\n";
@@ -87,36 +100,41 @@ sub check_env{
         }
 
 		make_path $DESTINATION || print "Cannot create $DESTINATION: $!\n" unless $opt_s && exit 0;
+
 	}
 }
 
 # The first_run() subroutine walks the user through setting up packrat's
 # settings as well as authorizing packrat to access online accounts.
 sub first_run{
+
 	print "\nWelcome to packrat. Let's get some configuration details\n";
 	print "so that packrat will work for you.\n";
 
-    print "\nWhere do you want to save image files that packrat downloads? [$HOME/packrat] ";
+    print "\nWhere do you want to save image files that packrat downloads? [" .$HOME . $DIR_SEPARATOR . "packrat] ";
     $DESTINATION = <STDIN>;
+    
     chomp($DESTINATION);
+
     if(!$DESTINATION){
-        $DESTINATION = "$HOME/packrat";
+        $DESTINATION = $HOME . $DIR_SEPARATOR . "packrat";
     }
 
     $CONF->{'destination'} = $DESTINATION;
+
     mkdir $DESTINATION || print "Cannot create $DESTINATION: $!\n" && exit;
 
-    if(!-e "$HOME/.packrat"){
-        mkdir "$HOME/.packrat" || print "Cannot create directory $HOME/.packrat: $!\n" && exit;
+    if(!-e $HOME . $DIR_SEPARATOR . ".packrat"){
+        mkdir $HOME . $DIR_SEPARATOR . ".packrat" || print "Cannot create directory " . $HOME . $DIR_SEPARATOR . ".packrat: $!\n" && exit;
     }
 
-    print "\nWhere should packrat save URLs that aren't direct image links? [$HOME/.packrat/nonimages] ";
+    print "\nWhere should packrat save URLs that aren't direct image links? [" . $HOME . $DIR_SEPARATOR . ".packrat" . $DIR_SEPARATOR . "nonimages] ";
 
     $NONIMAGEFILE = <STDIN>;
     chomp($NONIMAGEFILE);
 
     if(!$NONIMAGEFILE){
-        $NONIMAGEFILE= "$HOME/.packrat/nonimages";
+        $NONIMAGEFILE = $HOME . $DIR_SEPARATOR . ".packrat" . $DIR_SEPARATOR . "nonimages";
     }
 
     $CONF->{'nonimage_file'} = $NONIMAGEFILE;
@@ -133,8 +151,21 @@ sub first_run{
 
     $CONF->{'track_file'} = $TRACK_FILE;
 
+    my $browser_ok;
 
-    print "\nLog on to http://imgur.com, then navigate to https://api.imgur.com/oauth2/addclient and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here.\nJust leave this blank if you don't want to use imgur.\n";
+    if($BROWSER_CMD){
+        $browser_ok = open_browser('https://api.imgur.com/oauth2/addclient');
+
+        if($browser_ok == 0){
+
+            print "\nYour browser should open to https://api.imgur.com/oauth2/addclient. Log on to imgur.com and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here. \nJust leave this plank if you don't want to use imgur.\n";
+        }
+    }
+    
+    elsif(!$BROWSER_CMD || $browser_ok != 0){
+        print "\nLog on to http://imgur.com, then navigate to https://api.imgur.com/oauth2/addclient and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here.\nJust leave this blank if you don't want to use imgur.\n";
+    }
+
     print "Imgur.com Client ID: ";
     $IMGUR_ID = <STDIN>;
     chomp($IMGUR_ID);
@@ -190,8 +221,22 @@ sub add_tumblr{
 
 		$account->{'username'} = $username;
 
-		print "\nLog on to tumblr.com and go to http://www.tumblr.com/oauth/apps\n";
-		print "Register a new application and add the details requested below.\n";
+        my $browser_ok;
+
+        if($BROWSER_CMD){
+            $browser_ok = open_browser('http://www.tumblr.com/oauth/apps');
+
+            if($browser_ok == 0){
+
+                print "\nYour browser should open to http://www.tumblr.com/oauth/apps. Click 'Allow' to enable packrat to access your tumblr account\n";
+            }
+        }
+        
+        elsif(!$BROWSER_CMD || $browser_ok != 0){
+            print "\nLog on to tumblr.com and go to http://www.tumblr.com/oauth/apps\n";
+            print "Register a new application and add the details requested below.\n";
+        }
+
 		print "OAuth Consumer Key: ";
 		my $consumer_key = <STDIN>;
 		chomp $consumer_key;
@@ -214,8 +259,19 @@ sub add_tumblr{
 
 		my $verifier_url = $ua->get_request_token();
 
-		print "Paste this URL into your browser's address bar. Click 'Allow' to enable packrat to access your tumblr account:\n";
-		print "$verifier_url\n";
+        if($BROWSER_CMD){
+            my $browser_ok = open_browser($verifier_url);
+
+            if($browser_ok == 0){
+
+                print "\nYour browser should open to $verifier_url. Click 'Allow' to enable packrat to access your tumblr account\n";
+            }
+        }
+        
+        elsif(!$BROWSER_CMD || $browser_ok != 0){
+            print "Paste this URL into your browser's address bar. Click 'Allow' to enable packrat to access your tumblr account:\n";
+            print "$verifier_url\n";
+        }
 
 		my ($token, $secret) = $ua->get_access_token();
 
@@ -227,7 +283,7 @@ sub add_tumblr{
 		print "Packrat is now authorized to access your \"$username\" tumblr account.\n";
 
 		ANOTHER:{
-			print "\nWould you like to add another tumblr account? [Y/n]";
+			print "\nWould you like to add another tumblr account? [Y/n] ";
 			my $ans = <STDIN>;
 			chomp($ans);
 
@@ -291,7 +347,7 @@ sub add_delicious{
 		print "Packrat is now authorized to access your \"$username\" delicious account.\n";
 
 		ANOTHER:{
-			print "\nWould you like to add another delicious account? [Y/n]";
+			print "\nWould you like to add another delicious account? [Y/n] ";
 			my $ans = <STDIN>;
 			chomp($ans);
 
@@ -343,8 +399,23 @@ sub add_reddit{
 
 		$account->{'username'} = $username;
 
-		print "Log on to reddit.com and navigate to https://ssl.reddit.com/prefs/feeds/\n";
-		print "Locate the JSON button for \"your saved links\" and copy the link and paste it here.\n";
+        my $browser_ok;
+
+        if($BROWSER_CMD){
+            $browser_ok = open_browser('https://ssl.reddit.com/prefs/feeds/');
+
+            if($browser_ok == 0){
+
+                print "\nYour browser should open to https://ssl.reddit.com/prefs/feeds/. Make sure you're logged on with the Reddit account you want to add to packrat. In order to access the feed URL, you need to select \"enable private RSS feeds\" in the \"content options\" section on the \"Options\" tab of your Reddit account preferences.\n";
+            }
+        }
+        
+        elsif(!$BROWSER_CMD || $browser_ok != 0){
+            print "Log on to reddit.com and navigate to https://ssl.reddit.com/prefs/feeds/\n";
+        }
+
+
+		print "Locate the JSON button for \"your saved links\", copy the link, and paste it here.\n";
 		print "Saved link URL: ";
 		my $rssurl = <STDIN>;
 		chomp $rssurl;
@@ -399,12 +470,12 @@ sub randomstring{
 sub filename_check{
 	my $oldname = shift;
 
-	if (-e "$DESTINATION/$oldname") {
+	if (-e $DESTINATION . $DIR_SEPARATOR . $oldname) {
 		CHECK:{
 			my $randstring = randomstring();
 			my ($fn, $path, $suffix) = fileparse($oldname, @SUFFIXES);
 			my $newname = "$fn$randstring.$suffix";
-			if (-e "$DESTINATION/$newname"){ # Check whether the newly generated filename exists
+			if (-e $DESTINATION . $DIR_SEPARATOR . $newname){ # Check whether the newly generated filename exists
 				$oldname = $newname;
 				redo CHECK; # If is does exist, go back to the beginning of the CHECK block and re-append a new pseudo-random string.
 			}
@@ -436,7 +507,7 @@ sub get_imgur_album{
 
 	my $ua = LWP::UserAgent->new;
 
-	$ua->agent('Mozilla/5.0');
+	$ua->agent($USERAGENT);
 
 	$ua->default_header('Authorization' => $imgur_auth);
 
@@ -473,7 +544,7 @@ sub get_imgur_album{
         }
 
 		my $ua = LWP::UserAgent->new;
-		$ua->agent('Mozilla/5.0');
+		$ua->agent($USERAGENT);
 
 		$ua->default_header('Authorization' => $imgur_auth);
 
@@ -493,7 +564,7 @@ sub get_imgur_album{
 			next;
 		}
 
-		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
+		open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
 		binmode IMAGE;
 		print IMAGE $content;
 		close IMAGE;
@@ -520,13 +591,14 @@ sub get_imgur_image{
 	}
 
 	foreach my $image_id (@image_ids){
-		$image_id =~ s/(.*)\/?/$1/i;
+		$image_id =~ s/(.*)\/?[0-9]$/$1/i;
 		$url = 'https://api.imgur.com/3/image/' . $image_id;
 
 		my $imgur_auth = 'Client-ID ' . $IMGUR_ID;
 
 		my $json_ua = LWP::UserAgent->new;
-		$json_ua->agent('Mozilla/5.0');
+
+		$json_ua->agent($USERAGENT);
 
 		$json_ua->default_header('Authorization' => $imgur_auth);
 
@@ -560,7 +632,7 @@ sub get_imgur_image{
         }
 
 		my $image_ua = LWP::UserAgent->new;
-		$image_ua->agent('Mozilla/5.0');
+		$image_ua->agent($USERAGENT);
 
 		$image_ua->default_header('Authorization' => $imgur_auth);
 
@@ -581,7 +653,7 @@ sub get_imgur_image{
 			return;
 		}
 
-		open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && return;
+		open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && return;
 		binmode IMAGE;
 		print IMAGE $image_content;
 		close IMAGE;
@@ -598,7 +670,7 @@ sub check_tumblr_likes{
 		oauth_token_secret => shift 
 		);
 
-	$ua->agent('Mozilla/5.0');
+	$ua->agent($USERAGENT);
 
 	my $offset = 0;
 	my $limit = 1;
@@ -634,7 +706,7 @@ sub get_tumblr_likes{
 		oauth_token_secret => shift 
 		);
 
-	$ua->agent('Mozilla/5.0');
+	$ua->agent($USERAGENT);
 
 	my $offset = shift;
 	my $limit = shift;
@@ -651,6 +723,8 @@ sub get_tumblr_likes{
         if(!$opt_s){
             print "\nERROR: Could not get $url\nHTTP Response: " . $response->status_line . "\n\n";
         }
+
+        return 0;
 	}
 	return $content;
 }
@@ -673,7 +747,7 @@ sub download_tumblr_images{
 			$filename = filename_check($filename);
 
 			my $image_ua = LWP::UserAgent->new;
-			$image_ua->agent('Mozilla/5.0');
+			$image_ua->agent($USERAGENT);
 
 			my $image_response = $image_ua->get($url);
 
@@ -691,7 +765,7 @@ sub download_tumblr_images{
 				next;
 			}
 
-			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
+			open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
 			binmode IMAGE;
 			print IMAGE $image_content;
 			close IMAGE;
@@ -771,7 +845,7 @@ sub check_delicious_bookmarks{
 	my $url = 'https://' . $username . ':' . $password . '@api.del.icio.us/v1/posts/update';
 
 	my $ua = LWP::UserAgent->new;
-	$ua->agent('Mozilla/5.0');
+	$ua->agent($USERAGENT);
 
 	my $response = $ua->get($url);
 
@@ -819,7 +893,7 @@ sub get_delicious_bookmarks{
 	my $lastretrieve = shift;
 	my $url = 'https://' . $username . ':' . $password . '@api.del.icio.us/v1/json/posts/all?&fromdt=' . $lastretrieve;
 	my $ua = LWP::UserAgent->new;
-	$ua->agent('Mozilla/5.0');
+	$ua->agent($USERAGENT);
 	my $response = $ua->get($url);
 	my $content; 
 	if($response->is_success){
@@ -855,7 +929,7 @@ sub download_delicious_images{
             }
 
 			my $image_ua = LWP::UserAgent->new;
-			$image_ua->agent('Mozilla/5.0');
+			$image_ua->agent($USERAGENT);
 
 			my $image_response = $image_ua->get($url);
 
@@ -874,7 +948,7 @@ sub download_delicious_images{
 				next;
 			}
 
-			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
+			open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
 			binmode IMAGE;
 			print IMAGE $image_content;
 			close IMAGE;
@@ -924,7 +998,7 @@ sub get_delicious{
 sub check_reddit_saved{
 	my $url = shift;
 	my $ua = LWP::UserAgent->new;
-	$ua->agent('Mozilla/5.0');
+	$ua->agent($USERAGENT);
 	my $response = $ua->get($url);
 	my $content; 
 	if ($response->is_success){
@@ -961,7 +1035,7 @@ sub download_reddit_images{
             }
 
 			my $image_ua = LWP::UserAgent->new;
-			$image_ua->agent('Mozilla/5.0');
+			$image_ua->agent($USERAGENT);
 
 			my $image_response = $image_ua->get($url);
 
@@ -980,7 +1054,7 @@ sub download_reddit_images{
 				next;
 			}
 
-			open(IMAGE, '>', "$DESTINATION/$filename") || print "Could not save $DESTINATION/$filename: $!\n" unless $opt_s && next;
+			open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
 			binmode IMAGE;
 			print IMAGE $image_content;
 			close IMAGE;
