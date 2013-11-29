@@ -880,6 +880,13 @@ sub get_tumblr{
 
 		my $total_likes = check_tumblr_likes($username, $consumer_key, $consumer_secret, $token_key, $token_secret);
 
+        while($total_likes < 0 && my $get_tries < 3){
+            print "\nTumblr hiccup: $username account total likes isn't right, trying again.\n\n";
+            sleep(2);
+            $total_likes = check_tumblr_likes($username, $consumer_key, $consumer_secret, $token_key, $token_secret);
+            $get_tries++;
+        }
+            
 		$TRACK->{'services'}->{'tumblr'}->{$username} = $total_likes;
 
 		my $new_likes = $total_likes - $likes_i_have;
