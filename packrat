@@ -107,7 +107,7 @@ use Env qw(HOME USERPROFILE);	# Used to retreive the $HOME environment variable.
 
 use strict;
 
-our($opt_q, $opt_s, $opt_r, $opt_c);
+our($opt_q, $opt_s, $opt_r, $opt_c, $opt_h);
 
 
 # Constants that should be available in the broadest scope possible.
@@ -1207,7 +1207,12 @@ sub get_reddit{
 }
 
 # MAIN
-getopts('qsrc:');
+getopts('qsrc:h');
+
+if($opt_h){
+    HELP_MESSAGE();
+    exit;
+}
 
 if($opt_c){
     if(-e $opt_c){
