@@ -307,7 +307,7 @@ sub add_tumblr{
 		my $username = <STDIN>;
 		chomp $username;
 
-		$account->{'username'} = $username;
+		$account->{'username'} = lc $username;
 
         my $browser_ok;
 
@@ -345,14 +345,36 @@ sub add_tumblr{
 			 oauth_access_token_url => $access_token_url
 		);
 
-		my $verifier_url = $ua->get_request_token();
+		my $verifier_url = eval{$ua->get_request_token()};
+
+        if(!$verifier_url){
+            ANOTHER:{
+                print "\nThere was a problem adding that account.\n";
+                print "\nWould you like to add another tumblr account? [Y/n] ";
+                my $ans = <STDIN>;
+                chomp($ans);
+
+                if($ans =~ /^y$/i || $ans eq ''){
+                    redo ADDACCOUNT;
+                }
+                elsif($ans =~ /^n$/i){
+                    $CONF->{'services'}->{'tumblr'} = $tumblr_accounts;
+                    $CONF_UPDATE = 1;
+                    return;
+                }
+                else{
+                    print "Please type 'y' or 'n' ";
+                    redo ANOTHER;
+                }
+            }
+        }
 
         if($BROWSER_CMD){
             my $browser_ok = open_browser($verifier_url);
 
             if($browser_ok == 0){
 
-                print "\nYour browser should open to $verifier_url. Click 'Allow' to enable packrat to access your tumblr account\n";
+                print "\nYour browser should open to $verifier_url. Click 'Allow' to enable packrat to access your tumblr account.\n";
             }
         }
         
@@ -361,7 +383,29 @@ sub add_tumblr{
             print "$verifier_url\n";
         }
 
-		my ($token, $secret) = $ua->get_access_token();
+		my ($token, $secret) = eval{$ua->get_access_token()};
+
+        if(!$token || !$secret){
+            ANOTHER:{
+                print "\nThere was a problem adding that account.\n";
+                print "\nWould you like to add another tumblr account? [Y/n] ";
+                my $ans = <STDIN>;
+                chomp($ans);
+
+                if($ans =~ /^y$/i || $ans eq ''){
+                    redo ADDACCOUNT;
+                }
+                elsif($ans =~ /^n$/i){
+                    $CONF->{'services'}->{'tumblr'} = $tumblr_accounts;
+                    $CONF_UPDATE = 1;
+                    return;
+                }
+                else{
+                    print "Please type 'y' or 'n' ";
+                    redo ANOTHER;
+                }
+            }
+        }
 
 		$account->{'token_key'} = $token;
 		$account->{'token_secret'} = $secret;
@@ -422,7 +466,7 @@ sub add_delicious{
 		my $username = <STDIN>;
 		chomp $username;
 
-		$account->{'username'} = $username;
+		$account->{'username'} = lc $username;
 
 		print "delicious password: ";
 		my $password = <STDIN>;
@@ -485,7 +529,7 @@ sub add_reddit{
 		my $username = <STDIN>;
 		chomp $username;
 
-		$account->{'username'} = $username;
+		$account->{'username'} = lc $username;
 
         my $browser_ok;
 
