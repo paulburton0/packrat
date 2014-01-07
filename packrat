@@ -953,6 +953,15 @@ sub get_tumblr{
 			if($remainder > 0){
 				download_tumblr_images(get_tumblr_likes($consumer_key, $consumer_secret, $token_key, $token_secret, $offset, $remainder));
 			}
+
+        my $new_tracking = JSON::XS->new->pretty(1)->encode($TRACK);
+
+        open(TRACKING, '>', $CONF->{'track_file'}) || print "Could not open $CONF->{'track_file'}: $!\n" unless $opt_s && exit;
+
+        print TRACKING $new_tracking;
+
+        close TRACKING;
+
 		}else{
 			if(!$opt_q && !$opt_s){
                 print "No new likes to get for $username.\n"
@@ -1130,6 +1139,14 @@ sub get_delicious{
                 print "There are no new delicious bookmarks for $username.\n";
             }
 		}
+
+        my $new_tracking = JSON::XS->new->pretty(1)->encode($TRACK);
+
+        open(TRACKING, '>', $CONF->{'track_file'}) || print "Could not open $CONF->{'track_file'}: $!\n" unless $opt_s && exit;
+
+        print TRACKING $new_tracking;
+
+        close TRACKING;
 	}
 }
 
@@ -1247,6 +1264,14 @@ sub get_reddit{
 
             sleep(2); # Don't query the Reddit API too often.
 		}
+
+        my $new_tracking = JSON::XS->new->pretty(1)->encode($TRACK);
+
+        open(TRACKING, '>', $CONF->{'track_file'}) || print "Could not open $CONF->{'track_file'}: $!\n" unless $opt_s && exit;
+
+        print TRACKING $new_tracking;
+
+        close TRACKING;
 	}
 }
 
