@@ -246,7 +246,7 @@ sub first_run{
 
         if($browser_ok == 0){
 
-            print "\nYour browser should open to https://api.imgur.com/oauth2/addclient. Log on to imgur.com and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here. \nJust leave this plank if you don't want to use imgur.\n";
+            print "\nYour browser should open to https://api.imgur.com/oauth2/addclient. Log on to imgur.com and add an application. For Authorization Type, choose \"Anonymous usage without user authentication\". Record the Client ID that your application is assigned here. \nJust leave this blank if you don't want to use the imgur API.\n";
         }
     }
     
