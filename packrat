@@ -1103,6 +1103,9 @@ sub download_delicious_images{
 		}
 		elsif($url =~ /imgur\.com\//i){
 			get_imgur_image($url);
+        #}
+        #elsif{$url =~ /gfycat\.com\//i){
+            #get_gfycat_gif($url);
 		}else{
 			if(!$opt_q && !$opt_s){
                 print "Adding non-image url $url\n";
@@ -1179,7 +1182,11 @@ sub download_reddit_images{
 
 		my $url = $item->{'data'}->{'url'};
 
-		my ($fn, $path, $suffix) = fileparse($url, @SUFFIXES);
+        if( !$url ){
+            next;
+        }
+
+        my ($fn, $path, $suffix) = fileparse($url, @SUFFIXES);
 
 		if($url =~ /imgur\.com\/a\//i){
 			get_imgur_album($url);
