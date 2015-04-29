@@ -3,7 +3,7 @@
 # Packrat is a tool that locally archives images that have been saved on reddit.com, liked on tumblr.com, or bookmarked on del.icio.us. Packrat supports multiple accounts on each of these sites. 
 
 # You can find the latest vesion of packrat at https://github.com/paulburton0/packrat. If you have ideas or run across bugs, please report them in the GitHub issue tracker.
-
+no warnings;
 my $MODULE_ERROR;
 
 # Include perl modules
