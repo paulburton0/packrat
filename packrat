@@ -6,6 +6,8 @@
 no warnings;
 my $MODULE_ERROR;
 
+use Data::Dumper;
+
 # Include perl modules
 eval{
     require JSON::XS; 		# Used for processing JSON results received from web apis and for reading and writing the .packrat.conf file.
@@ -869,40 +871,75 @@ sub download_tumblr_images{
 	my $likes = \@{$json->{'response'}->{'liked_posts'}}; 
 
 	foreach my $like (@$likes){
-		my $photos = \@{$like->{'photos'}};
-		foreach my $photo (@$photos){
-			my $url = $photo->{'original_size'}->{'url'};
-			my $filename = fileparse($url);
+        if($like->{'type'} =~ 'photo'){
+            my $photos = \@{$like->{'photos'}};
+            foreach my $photo (@$photos){
+                    my $url = $photo->{'original_size'}->{'url'};
+                    my $filename = fileparse($url);
+                    if(!$opt_q && !$opt_s){
+                        print "Downloading $filename\n";
+                    }
+                    $filename = filename_check($filename);
+
+                    my $image_ua = LWP::UserAgent->new;
+                    $image_ua->agent($USERAGENT);
+
+                    my $image_response = $image_ua->get($url);
+
+                    my $image_content;
+
+                    if ($image_response->is_success) {
+                        $image_content = $image_response->decoded_content;
+                    }else{
+                        if(!$opt_s){
+                            print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+                        }
+                    open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
+                    print FAILEDURLS "$url\n";
+                    close FAILEDRULS;
+                        next;
+                    }
+
+                    open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
+                    binmode IMAGE;
+                    print IMAGE $image_content;
+                    close IMAGE;
+            }
+        }
+        elsif($like->{'type'} =~ "video" && $like->{'video_type'} =~ "tumblr"){
+            print "Like Type: $like->{'type'}\n";
+            my $url = $like->{'video_url'};
+            my $filename = fileparse($url);
             if(!$opt_q && !$opt_s){
                 print "Downloading $filename\n";
             }
-			$filename = filename_check($filename);
+            $filename = filename_check($filename);
 
-			my $image_ua = LWP::UserAgent->new;
-			$image_ua->agent($USERAGENT);
+            my $image_ua = LWP::UserAgent->new;
+            $image_ua->agent($USERAGENT);
 
-			my $image_response = $image_ua->get($url);
+            my $image_response = $image_ua->get($url);
 
-			my $image_content;
+            my $image_content;
 
-			if ($image_response->is_success) {
-				$image_content = $image_response->decoded_content;
-			}else{
+            if ($image_response->is_success) {
+                $image_content = $image_response->decoded_content;
+            }else{
                 if(!$opt_s){
                     print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
                 }
-			open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
-			print FAILEDURLS "$url\n";
-			close FAILEDRULS;
-				next;
-			}
+            open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && next;
+            print FAILEDURLS "$url\n";
+            close FAILEDRULS;
+                next;
+            }
 
-			open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
-			binmode IMAGE;
-			print IMAGE $image_content;
-			close IMAGE;
-		}
-	}
+            open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && next;
+            binmode IMAGE;
+            print IMAGE $image_content;
+            close IMAGE;
+        }
+    }
 }
 
 # get_tumblr()
