@@ -907,7 +907,6 @@ sub download_tumblr_images{
             }
         }
         elsif($like->{'type'} =~ "video" && $like->{'video_type'} =~ "tumblr"){
-            print "Like Type: $like->{'type'}\n";
             my $url = $like->{'video_url'};
             my $filename = fileparse($url);
             if(!$opt_q && !$opt_s){
