@@ -43,7 +43,7 @@ eval{
 };
 
 if($@){
-    $MODULE_ERROR .= "\nThe OAuth::Consumer module is not installed. Please install it before running packrat.\n";
+    $MODULE_ERROR .= "\nThe OAuth::Consumer module is not installed. Please install it before running packrat. Additionally, you may need to install LWP::Authen::OAuth\n";
 }
 
 eval{
@@ -123,7 +123,7 @@ my $FAILEDURLS;
 my $IMGUR_ID;
 my $TRACK;
 my $TRACK_FILE;
-my @SUFFIXES = ('jpeg', 'jpg', 'png', 'gif', 'bmp', 'tif', 'tiff'); # The list of image extensions we will be saving.
+my @SUFFIXES = ('jpeg', 'jpg', 'png', 'gif', 'gifv', 'bmp', 'tif', 'tiff'); # The list of image extensions we will be saving.
 my $BROWSER_CMD = open_browser_cmd();
 my $DIR_SEPARATOR = '/';
 
@@ -611,7 +611,7 @@ sub filename_check{
 			my $newname = "$fn$randstring.$suffix";
 			if (-e $DESTINATION . $DIR_SEPARATOR . $newname){ # Check whether the newly generated filename exists
 				$oldname = $newname;
-				redo CHECK; # If is does exist, go back to the beginning of the CHECK block and re-append a new pseudo-random string.
+				redo CHECK; # If it does exist, go back to the beginning of the CHECK block and re-append a new pseudo-random string.
 			}
 		return $newname;
 		}
@@ -714,6 +714,10 @@ sub get_imgur_image{
 
 	my $url = shift;
 
+    if($url =~ /\?$/){
+        $url = substr($url, 0, -1);
+    }
+
 	my @image_ids;
 
 	my($id) = fileparse($url);
@@ -794,6 +798,46 @@ sub get_imgur_image{
 	}
 }
 
+# get_gfycat_gif() downloads a single gfycat gif.
+sub get_gfycat_gif{
+    my $url = shift;
+
+    $url =~ s/(https:\/\/)(.*)$/$1giant.$2.gif/i;
+
+    my ($fn, $path, $suffix) = fileparse($url, @SUFFIXES);
+
+    my $filename = filename_check($fn . $suffix);	
+
+    if(!$opt_q && !$opt_s){
+        print "Downloading $url\n";
+    }
+
+    my $image_ua = LWP::UserAgent->new;
+
+    $image_ua->agent($USERAGENT);
+
+    my $image_response = $image_ua->get($url);
+
+    my $image_content;
+
+    if($image_response->is_success){
+        $image_content = $image_response->decoded_content;
+    }else{
+        if(!$opt_s){
+            print "\nERROR: Could not get $url\nHTTP Response: " . $image_response->status_line . "\n\n";
+        }
+
+        open(FAILEDURLS, '>>', $FAILEDURLS) || print "Could not open $FAILEDURLS: $!\n" unless $opt_s && return;
+        print FAILEDURLS "$url\n";
+        close FAILEDRULS;
+        return;
+
+    }
+    open(IMAGE, '>', $DESTINATION . $DIR_SEPARATOR . $filename) || print "Could not save " . $DESTINATION . $DIR_SEPARATOR . $filename . ": $!\n" unless $opt_s && return;
+    binmode IMAGE;
+    print IMAGE $image_content;
+    close IMAGE;
+}
 # Check for new tumblr likes
 sub check_tumblr_likes{
 	my $username = shift;
@@ -1139,9 +1183,9 @@ sub download_delicious_images{
 		}
 		elsif($url =~ /imgur\.com\//i){
 			get_imgur_image($url);
-        #}
-        #elsif{$url =~ /gfycat\.com\//i){
-            #get_gfycat_gif($url);
+        }
+        elsif($url =~ /gfycat\.com\//i){
+            get_gfycat_gif($url);
 		}else{
 			if(!$opt_q && !$opt_s){
                 print "Adding non-image url $url\n";
@@ -1224,6 +1268,10 @@ sub download_reddit_images{
 
         my ($fn, $path, $suffix) = fileparse($url, @SUFFIXES);
 
+        if($url =~ /\.gifv$/i){
+            $url = substr($url, 0, -1); 
+        }
+
 		if($url =~ /imgur\.com\/a\//i){
 			get_imgur_album($url);
 		}
@@ -1261,6 +1309,8 @@ sub download_reddit_images{
 		}
 		elsif($url =~ /imgur\.com\//i){
 			get_imgur_image($url);
+        }elsif($url =~ /gfycat\.com\//i){
+            get_gfycat_gif($url);
 		}else{
 			if(!$opt_q && !$opt_s){
                 print "Adding non-image url $url\n";
