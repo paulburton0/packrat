@@ -1026,8 +1026,17 @@ sub get_tumblr{
 			my $offset = 0;
 
 			for( my $page = 1 ; $page<=$pages; $page++){
+                if($offset => 1000){
+                    if(!$opt_s){
+                        print "Stopping at offset of 1000 due to Tumblr API limitation.\n"
+                    }
+                    last;
+                }
 				download_tumblr_images(get_tumblr_likes($consumer_key, $consumer_secret, $token_key, $token_secret, $offset, $likes_per_page));
 				$offset += $likes_per_page;
+                if(!$opt_q && !$opt_s){
+                    print "Got $offset likes so far ...\n";
+                }
 			}
 
 			if($remainder > 0){
