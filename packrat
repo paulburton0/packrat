@@ -3,7 +3,8 @@
 # Packrat is a tool that locally archives images that have been saved on reddit.com, liked on tumblr.com, or bookmarked on del.icio.us. Packrat supports multiple accounts on each of these sites. 
 
 # You can find the latest vesion of packrat at https://github.com/paulburton0/packrat. If you have ideas or run across bugs, please report them in the GitHub issue tracker.
-no warnings;
+no warnings; 
+
 my $MODULE_ERROR;
 
 use Data::Dumper;
@@ -38,6 +39,7 @@ if($@){
 }
 
 eval{
+    no warnings;
     require OAuth::Consumer;# Used to fetch JSON from tumblr.
     OAuth::Consumer->import();
 };
@@ -126,6 +128,7 @@ my $TRACK_FILE;
 my @SUFFIXES = ('jpeg', 'jpg', 'png', 'gif', 'gifv', 'bmp', 'tif', 'tiff'); # The list of image extensions we will be saving.
 my $BROWSER_CMD = open_browser_cmd();
 my $DIR_SEPARATOR = '/';
+my $SUMMARY_FILE = '.summary';
 
 unless($ENV{"HOME"}){
     $HOME = $ENV{"USERPROFILE"};
@@ -911,11 +914,12 @@ sub get_tumblr_likes{
 sub download_tumblr_images{
 	my $content = shift;
 	my $json = JSON::XS->new->decode($content);
-
 	my $likes = \@{$json->{'response'}->{'liked_posts'}}; 
-
 	foreach my $like (@$likes){
         if($like->{'type'} =~ 'photo'){
+            my $summary = $like->{'trail'}[0]{'content_raw'};
+            $summary =~ tr{\n}{ };
+            $summary =~ s/\"/\\\"/g;
             my $photos = \@{$like->{'photos'}};
             foreach my $photo (@$photos){
                     my $url = $photo->{'original_size'}->{'url'};
@@ -948,9 +952,21 @@ sub download_tumblr_images{
                     binmode IMAGE;
                     print IMAGE $image_content;
                     close IMAGE;
+                    if(\$_ == \@$likes[-1]){
+                        open(SUMMARY, '>>', $DESTINATION . $DIR_SEPARATOR . $SUMMARY_FILE);
+                        print SUMMARY "\t\"$filename\" : \"$summary\"\n";
+                        close SUMMARY;
+                    }else{
+                        open(SUMMARY, '>>', $DESTINATION . $DIR_SEPARATOR . $SUMMARY_FILE);
+                        print SUMMARY "\t\"$filename\" : \"$summary\",\n";
+                        close SUMMARY;
+                    }
             }
         }
         elsif($like->{'type'} =~ "video" && $like->{'video_type'} =~ "tumblr"){
+            my $summary = $like->{'trail'}[0]{'content_raw'};
+            $summary =~ tr{\n}{ };
+            $summary =~ s/\"/\\\"/g;
             my $url = $like->{'video_url'};
             my $filename = fileparse($url);
             if(!$opt_q && !$opt_s){
@@ -981,6 +997,15 @@ sub download_tumblr_images{
             binmode IMAGE;
             print IMAGE $image_content;
             close IMAGE;
+            if(\$_ == \@$likes[-1]){
+                open(SUMMARY, '>>', $DESTINATION . $DIR_SEPARATOR . $SUMMARY_FILE);
+                print SUMMARY "\t\"$filename\" : \"$summary\"\n";
+                close SUMMARY;
+            }else{
+                open(SUMMARY, '>>', $DESTINATION . $DIR_SEPARATOR . $SUMMARY_FILE);
+                print SUMMARY "\t\"$filename\" : \"$summary\",\n";
+                close SUMMARY;
+            }
         }
     }
 }
@@ -1025,8 +1050,12 @@ sub get_tumblr{
 			my $remainder = $new_likes % $likes_per_page;
 			my $offset = 0;
 
+            open(SUMMARY, '>', $DESTINATION . $DIR_SEPARATOR . $SUMMARY_FILE);
+            print SUMMARY "{\n";
+            close SUMMARY;
+
 			for( my $page = 1 ; $page<=$pages; $page++){
-                if($offset => 1000){
+                if($offset >= 1000){
                     if(!$opt_s){
                         print "Stopping at offset of 1000 due to Tumblr API limitation.\n"
                     }
@@ -1050,6 +1079,10 @@ sub get_tumblr{
         print TRACKING $new_tracking;
 
         close TRACKING;
+
+        open(SUMMARY, '>>', $DESTINATION . $DIR_SEPARATOR . $SUMMARY_FILE);
+        print SUMMARY "}";
+        close SUMMARY;
 
 		}else{
 			if(!$opt_q && !$opt_s){
